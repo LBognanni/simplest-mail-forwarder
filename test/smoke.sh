@@ -164,8 +164,10 @@ status=$?
 check "malformed SRS_DOMAIN refused" test "$status" -ne 0
 
 echo "# Start"
-if ! dc up -d --wait --wait-timeout 60 mailserver mailpit client >/dev/null 2>&1; then
+# client has no healthcheck, so it's started separately from the services being waited on.
+if ! output=$(dc up -d client 2>&1 && dc up -d --wait --wait-timeout 60 mailserver mailpit 2>&1); then
     not_ok "stack starts and becomes healthy"
+    printf '%s\n' "$output"
     dc ps -a
     logs
     exit 1

@@ -1,0 +1,75 @@
+# Example stack. Keep this hardening in any other deployment of the image.
+name: simplest-mail-forwarder
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "3"
+
+services:
+  mailserver:
+    image: ${IMAGE:?set IMAGE to the published image, pinned by digest}
+    hostname: ${MAIL_HOSTNAME:?}
+    restart: unless-stopped
+    depends_on: [postsrsd]
+    ports:
+      - "25:25"
+    environment:
+      - MAIL_HOSTNAME=${MAIL_HOSTNAME:?}
+      - FORWARD_RULES=${FORWARD_RULES:?}
+    volumes:
+      - postfix-spool:/var/spool/postfix
+      - mail-tls:/etc/postfix-tls
+    tmpfs:
+      - /run
+      - /tmp
+      - /etc/postfix
+      - /var/lib/postfix
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    mem_limit: 256m
+    networks: [default, mail-internal]
+    <<: *logging
+
+  postsrsd:
+    image: ${IMAGE:?}
+    entrypoint: ["/usr/local/bin/postsrsd-entrypoint.sh"]
+    user: postsrsd
+    init: true
+    restart: unless-stopped
+    environment:
+      - SRS_DOMAIN=${SRS_DOMAIN:?}
+    volumes:
+      - srs-secret:/var/lib/postsrsd
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10003"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 1s
+      retries: 3
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    mem_limit: 64m
+    networks: [mail-internal]
+    <<: *logging
+
+volumes:
+  postfix-spool:
+  mail-tls:
+  srs-secret:
+
+networks:
+  mail-internal:
+    internal: true

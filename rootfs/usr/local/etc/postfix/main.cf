@@ -1,0 +1,49 @@
+compatibility_level = 3.11
+inet_protocols = ipv4
+smtpd_banner = $myhostname ESMTP
+mynetworks = 127.0.0.0/8
+maillog_file = /dev/stdout
+
+# No local delivery. The root filesystem is read-only, so anything accepted for a local
+# user, such as root@[this-ip], would sit in the queue for days.
+mydestination =
+local_recipient_maps = fail:no-local-recipients
+local_transport = error:5.1.1 local delivery is disabled
+alias_maps =
+alias_database =
+
+# Forwarding
+virtual_alias_maps = lmdb:/etc/postfix/virtual
+
+# No login, no relaying
+smtpd_sasl_auth_enable = no
+smtpd_relay_restrictions = reject_unauth_destination
+smtpd_recipient_restrictions =
+    reject_unauth_pipelining,
+    reject_non_fqdn_sender,
+    reject_unknown_sender_domain
+smtpd_helo_required = yes
+disable_vrfy_command = yes
+
+# TLS
+smtpd_tls_security_level = may
+smtpd_tls_chain_files = /etc/postfix-tls/key.pem, /etc/postfix-tls/cert.pem
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_protocols = >=TLSv1.2
+smtp_tls_security_level = may
+smtp_tls_protocols = >=TLSv1.2
+
+# Limits
+message_size_limit = 26214400
+smtpd_client_connection_count_limit = 10
+smtpd_client_connection_rate_limit = 30
+smtpd_client_message_rate_limit = 60
+
+# SRS
+sender_canonical_maps = socketmap:inet:postsrsd:10003:forward
+sender_canonical_classes = envelope_sender
+recipient_canonical_maps = socketmap:inet:postsrsd:10003:reverse
+recipient_canonical_classes = envelope_recipient, header_recipient
+
+# Backscatter: discard all mail with an empty envelope sender. README.md explains the trade-off.
+sender_dependent_default_transport_maps = inline:{ { <> = discard:empty sender } }

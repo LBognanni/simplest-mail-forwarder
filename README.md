@@ -1,85 +1,111 @@
 # simplest-mail-forwarder
 
-A small container image that forwards all mail for your domains to other addresses. It runs Postfix and
-PostSRSd on Alpine, with no login, no submission port and no DKIM. It only forwards.
+A small mail server that forwards all mail sent to your domains on to other addresses. It only forwards:
+it doesn't store mail, and you can't log in to it or send mail through it.
 
-Both run in one container, with no process supervisor. The Postfix master is PID 1, and a small loop in
-the entrypoint restarts PostSRSd if it exits. PostSRSd listens on localhost only and runs as its own user.
+## Before you start
 
-## Usage
+You need a server that can send and receive email on port 25, which many cloud providers block by default.
+You also need these DNS records:
 
-Use [`deploy/compose.yml`](deploy/compose.yml) as your starting point. Copy `deploy/.env.example` to
-`.env`, fill it in, then run `docker compose up -d`. Pin `IMAGE` by digest.
+| Record | Example |
+|---|---|
+| A | `mail.example.com` → your server's IP |
+| MX, for each domain | `example.com` → `10 mail.example.com` |
+| TXT | `example.com` → `v=spf1 ip4:<your server's IP> ~all` |
+| PTR, set with your hosting provider | your server's IP → `mail.example.com` |
 
-| Variable | Example | Notes |
+## Running with `docker run`
+
+```sh
+docker run -d --name mailserver \
+  --hostname mail.example.com \
+  --restart unless-stopped \
+  -p 25:25 \
+  -e MAIL_HOSTNAME=mail.example.com \
+  -e 'FORWARD_RULES=@example.com:someone@example.net' \
+  -e SRS_DOMAIN=example.com \
+  -v postfix-spool:/var/spool/postfix \
+  -v mail-tls:/etc/postfix-tls \
+  -v srs-secret:/var/lib/postsrsd \
+  --tmpfs /run --tmpfs /tmp --tmpfs /etc/postfix --tmpfs /var/lib/postfix \
+  --read-only \
+  --cap-drop ALL \
+  --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETGID --cap-add SETUID \
+  --security-opt no-new-privileges \
+  --pids-limit 200 \
+  --memory 256m \
+  ghcr.io/lbognanni/simplest-mail-forwarder:latest
+```
+
+## Running with Docker Compose
+
+```yaml
+services:
+  mailserver:
+    image: ghcr.io/lbognanni/simplest-mail-forwarder:latest
+    hostname: mail.example.com
+    restart: unless-stopped
+    ports:
+      - "25:25"
+    environment:
+      - MAIL_HOSTNAME=mail.example.com
+      - FORWARD_RULES=@example.com:someone@example.net
+      - SRS_DOMAIN=example.com
+    volumes:
+      - postfix-spool:/var/spool/postfix
+      - mail-tls:/etc/postfix-tls
+      - srs-secret:/var/lib/postsrsd
+    tmpfs:
+      - /run
+      - /tmp
+      - /etc/postfix
+      - /var/lib/postfix
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    mem_limit: 256m
+
+volumes:
+  postfix-spool:
+  mail-tls:
+  srs-secret:
+```
+
+## Configuration
+
+All three settings are required.
+
+| Setting | Example | Notes |
 |---|---|---|
-| `MAIL_HOSTNAME` | `mail.example.com` | Required. Should match the server's reverse DNS |
-| `FORWARD_RULES` | `@a.example:x@b.example;info@c.example:y@d.example` | Required. Rules separated by `;` |
-| `SRS_DOMAIN` | `a.example` | Required. Must have an MX pointing at this server and an SPF record allowing it |
+| `MAIL_HOSTNAME` | `mail.example.com` | Your server's name, the same as its A and PTR records |
+| `FORWARD_RULES` | `@foo.com:alice@bar.net;info@foo.com:bob@bar.net` | Where to forward mail. Separate rules with `;` |
+| `SRS_DOMAIN` | `foo.com` | One of your domains, with the MX and TXT records above |
 
-Each rule is `@domain:address` for a catch-all, or `user@domain:address` for one address. A `user@domain`
-rule overrides a catch-all. If a domain only has `user@domain` rules, other addresses there are refused.
+`@foo.com:alice@bar.net` forwards everything sent to `foo.com`. `info@foo.com:bob@bar.net` forwards
+only that address, and takes priority over a rule for the whole domain. Each rule has one destination.
 
-Each rule forwards to one address. Any invalid rule stops the container, and the value is never logged.
+Back up the `srs-secret` volume, because losing it can break replies to recently forwarded mail.
 
-## What it won't do
+## Limitations
 
-**It discards all mail with an empty envelope sender.** A catch-all accepts everything, so when a
-destination later rejects spam, a bounce to the forged sender would harm this IP's reputation. The cost
-is that genuine senders aren't told if the destination rejects their mail, and auto-replies or receipts
-sent with an empty sender are lost. To accept the backscatter instead, remove the
-`sender_dependent_default_transport_maps` line from `main.cf`.
+- **No "undeliverable" notices.** If your inbox provider refuses a message, the sender isn't told.
+- **Some automatic replies are lost.** If you send mail from a forwarded address, you may not receive
+  automatic replies to it, such as out-of-office messages, read receipts or "undeliverable" notices.
+- **No spam filter.** Your inbox provider's spam filter does that job.
 
-**There's no spam filtering or inbound SPF checking**, and the certificate on port 25 is self-signed. TLS
-is opportunistic, which suits server-to-server mail unless you use MTA-STS or DANE.
+## Updating and troubleshooting
 
-**Mail stops if PostSRSd is down, but isn't lost.** Postfix answers `451`, and senders retry later.
+To update, run `docker compose pull`, then `docker compose up -d mailserver`. Your server doesn't update by
+itself, so do this now and then to pick up security fixes.
 
-## Operations
+If mail stops arriving, read the logs with `docker compose logs -f mailserver`. See mail waiting to be
+delivered with `docker compose exec mailserver postqueue -p`.
 
-- Queue: `docker compose exec mailserver postqueue -p`
-- Retry the queue now: `docker compose exec mailserver postqueue -f`
-- Logs: `docker compose logs -f mailserver`
+## More
 
-To update, change the digest and run `docker compose up -d mailserver`. The queue is on a volume, and
-senders retry during the short restart.
-
-Back up the `srs-secret` volume. Losing it breaks replies to in-flight SRS addresses, though new mail
-keeps working. The UIDs and GIDs are fixed in the `Dockerfile`, so volumes keep working across rebuilds.
-Don't change them.
-
-## Images
-
-CI rebuilds the image weekly and on every push to `main`, then tests and scans it. It publishes
-`ghcr.io/lbognanni/simplest-mail-forwarder:<yyyy-mm-dd>` and `:latest` with build provenance:
-
-```
-gh attestation verify oci://ghcr.io/lbognanni/simplest-mail-forwarder@sha256:... --owner LBognanni
-```
-
-CI doesn't deploy or announce new images. GitHub also disables scheduled workflows after 60 days without
-repository activity, so check that the weekly build is still running.
-
-## Development
-
-```
-docker build -t simplest-mail-forwarder:test .
-test/smoke.sh
-```
-
-The smoke test sends real SMTP from a separate container, with the production hardening, into a
-[Mailpit](https://mailpit.axllent.org/) sink. It needs outbound DNS for one check.
-
-To scan a local build:
-
-```
-docker save -o test/image.tar simplest-mail-forwarder:test
-docker compose -f test/compose.yml --profile scan run --rm trivy
-```
-
-This repo is public. Use `example.com` and `*.test` addresses in tests, and never commit real forwarding
-targets, secrets or personal data.
-
-## Licence
-
-[GNU Affero General Public License v3.0](LICENSE).
+- Developer notes: [DEVELOPERS.md](DEVELOPERS.md)
+- Licence: [GNU Affero General Public License v3.0](LICENSE)

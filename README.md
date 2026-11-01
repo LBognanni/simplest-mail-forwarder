@@ -3,25 +3,24 @@
 A small container image that forwards all mail for your domains to other addresses. It runs Postfix and
 PostSRSd on Alpine, with no login, no submission port and no DKIM. It only forwards.
 
-Postfix and PostSRSd run as two containers from the same image, so there's no process supervisor.
+Both run in one container, with no process supervisor. The Postfix master is PID 1, and a small loop in
+the entrypoint restarts PostSRSd if it exits. PostSRSd listens on localhost only and runs as its own user.
 
 ## Usage
 
 Use [`deploy/compose.yml`](deploy/compose.yml) as your starting point. Copy `deploy/.env.example` to
 `.env`, fill it in, then run `docker compose up -d`. Pin `IMAGE` by digest.
 
-| Variable | Container | Example | Notes |
-|---|---|---|---|
-| `MAIL_HOSTNAME` | `mailserver` | `mail.example.com` | Required. Should match the server's reverse DNS |
-| `FORWARD_RULES` | `mailserver` | `@a.example:x@b.example;info@c.example:y@d.example` | Required. Rules separated by `;` |
-| `SRS_DOMAIN` | `postsrsd` | `a.example` | Required. Must have an MX pointing at this server and an SPF record allowing it |
+| Variable | Example | Notes |
+|---|---|---|
+| `MAIL_HOSTNAME` | `mail.example.com` | Required. Should match the server's reverse DNS |
+| `FORWARD_RULES` | `@a.example:x@b.example;info@c.example:y@d.example` | Required. Rules separated by `;` |
+| `SRS_DOMAIN` | `a.example` | Required. Must have an MX pointing at this server and an SPF record allowing it |
 
 Each rule is `@domain:address` for a catch-all, or `user@domain:address` for one address. A `user@domain`
 rule overrides a catch-all. If a domain only has `user@domain` rules, other addresses there are refused.
 
 Each rule forwards to one address. Any invalid rule stops the container, and the value is never logged.
-
-`postsrsd` must run as `user: postsrsd`, and it needs no capabilities.
 
 ## What it won't do
 
@@ -40,10 +39,10 @@ is opportunistic, which suits server-to-server mail unless you use MTA-STS or DA
 
 - Queue: `docker compose exec mailserver postqueue -p`
 - Retry the queue now: `docker compose exec mailserver postqueue -f`
-- Logs: `docker compose logs -f mailserver postsrsd`
+- Logs: `docker compose logs -f mailserver`
 
-To update, change the digest for both services and run `docker compose up -d mailserver postsrsd`. The
-queue is on a volume, and senders retry during the short restart.
+To update, change the digest and run `docker compose up -d mailserver`. The queue is on a volume, and
+senders retry during the short restart.
 
 Back up the `srs-secret` volume. Losing it breaks replies to in-flight SRS addresses, though new mail
 keeps working. The UIDs and GIDs are fixed in the `Dockerfile`, so volumes keep working across rebuilds.

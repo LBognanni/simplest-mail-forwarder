@@ -1,0 +1,90 @@
+# Same hardening as deploy/compose.yml. Keep them in step.
+name: smf-test
+
+x-mailserver: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  mailserver:
+    <<: *hardening
+    image: ${IMAGE:-simplest-mail-forwarder:test}
+    hostname: mail.smf.test
+    depends_on: [postsrsd, mailpit]
+    environment:
+      - MAIL_HOSTNAME=mail.smf.test
+      - FORWARD_RULES=@a.test:one@example.com;@b.test:two@example.com;vip@a.test:three@example.com;@srs.test:four@example.com
+    volumes:
+      - postfix-spool:/var/spool/postfix
+      - mail-tls:/etc/postfix-tls
+    tmpfs:
+      - /run
+      - /tmp
+      - /etc/postfix
+      - /var/lib/postfix
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    pids_limit: 200
+    mem_limit: 256m
+    networks: [default, mail-internal]
+
+  postsrsd:
+    <<: *hardening
+    image: ${IMAGE:-simplest-mail-forwarder:test}
+    entrypoint: ["/usr/local/bin/postsrsd-entrypoint.sh"]
+    user: postsrsd
+    init: true
+    environment:
+      - SRS_DOMAIN=srs.test
+    volumes:
+      - srs-secret:/var/lib/postsrsd
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10003"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 1s
+      retries: 3
+    pids_limit: 50
+    mem_limit: 64m
+    networks: [mail-internal]
+
+  # The delivery sink. smoke.sh points Postfix here with postconf.
+  mailpit:
+    image: axllent/mailpit:v1.33.0@sha256:9b3a463be15354c0f0eba91697d80e3e0d8a5623ef0e627cacc836bc17fd5231
+    environment:
+      - MP_SMTP_AUTH_ACCEPT_ANY=1
+      - MP_SMTP_AUTH_ALLOW_INSECURE=1
+
+  # Sends mail over the network, so the client isn't local to Postfix.
+  client:
+    image: ${IMAGE:-simplest-mail-forwarder:test}
+    entrypoint: ["sleep", "3600"]
+    healthcheck:
+      disable: true
+    init: true
+
+  # Scans a saved image: docker save -o test/image.tar <image>
+  trivy:
+    image: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+    profiles: [scan]
+    command:
+      - image
+      - --input=/scan/image.tar
+      - --severity=HIGH,CRITICAL
+      - --ignore-unfixed
+      - --exit-code=1
+    volumes:
+      - .:/scan:ro
+
+volumes:
+  postfix-spool:
+  mail-tls:
+  srs-secret:
+
+networks:
+  mail-internal:
+    internal: true

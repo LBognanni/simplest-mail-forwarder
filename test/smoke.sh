@@ -109,7 +109,7 @@ use_sink() {
 }
 
 secret_sum() {
-    dc exec -T postsrsd sha256sum /var/lib/postsrsd/secret
+    dc exec -T mailserver sha256sum /var/lib/postsrsd/secret
 }
 
 cert_sum() {
@@ -156,12 +156,15 @@ check "empty MAIL_HOSTNAME refused" test "$status" -ne 0
 output=$(dc run --rm --no-deps -T -e 'MAIL_HOSTNAME=mail.smf.test extra' mailserver 2>&1)
 status=$?
 check "malformed MAIL_HOSTNAME refused" test "$status" -ne 0
-output=$(dc run --rm --no-deps -T -e SRS_DOMAIN= postsrsd 2>&1)
+output=$(dc run --rm --no-deps -T -e SRS_DOMAIN= mailserver 2>&1)
 status=$?
 check "empty SRS_DOMAIN refused" test "$status" -ne 0
+output=$(dc run --rm --no-deps -T -e 'SRS_DOMAIN=srs.test"' mailserver 2>&1)
+status=$?
+check "malformed SRS_DOMAIN refused" test "$status" -ne 0
 
 echo "# Start"
-if ! dc up -d --wait --wait-timeout 60 mailserver postsrsd mailpit client >/dev/null 2>&1; then
+if ! dc up -d --wait --wait-timeout 60 mailserver mailpit client >/dev/null 2>&1; then
     not_ok "stack starts and becomes healthy"
     dc ps -a
     logs
@@ -238,16 +241,32 @@ done
 echo "# Hardening"
 check "postqueue -p works under no-new-privileges" dc exec -T mailserver postqueue -p
 check "root filesystem is read-only" test "$(dc exec -T mailserver sh -c 'touch /usr/x 2>&1; echo $?' | tail -n 1)" -ne 0
-check "postsrsd doesn't run as root" test "$(dc exec -T postsrsd id -u)" -ne 0
+srs_processes=$(dc exec -T mailserver ps -o user,comm | grep ' postsrsd$')
+check "postsrsd is running" has "$srs_processes" 'postsrsd'
+check "postsrsd doesn't run as root" lacks "$srs_processes" '^ *(root|0) '
+reply=$(dc exec -T client nc -z -w 2 mailserver 10003 2>&1; echo "exit=$?")
+check "postsrsd isn't reachable from outside the container" lacks "$reply" 'exit=0'
 check "the Docker subnet isn't trusted" test "$(dc exec -T mailserver postconf -h mynetworks)" = '127.0.0.0/8'
 
 echo "# postsrsd outage"
-dc stop postsrsd >/dev/null 2>&1
+# Pauses the restart loop, so the outage lasts until the check is done.
+srs_pid=$(dc exec -T mailserver pgrep -o postsrsd)
+loop_pid=$(dc exec -T mailserver cut -d' ' -f4 "/proc/$srs_pid/stat")
+dc exec -T mailserver kill -STOP "$loop_pid"
+# Root has no CAP_KILL here, so only the postsrsd user can signal it. pkill also catches the
+# forked children, which keep serving connections that idle smtpd processes still hold open.
+dc exec -T -u postsrsd mailserver pkill postsrsd
 # Nothing is queued here: the recipient lookup fails, so the sending server keeps the mail and retries.
 reply=$(smtp "EHLO client.test" "MAIL FROM:<alice@b.test>" "RCPT TO:<outage@a.test>" QUIT)
 check "the sender is told to retry while postsrsd is down" has "$reply" '^451 4\.3\.0'
-dc start postsrsd >/dev/null 2>&1
-dc up -d --wait --wait-timeout 60 postsrsd >/dev/null 2>&1
+dc exec -T mailserver kill -CONT "$loop_pid"
+tries=0
+until dc exec -T mailserver nc -z 127.0.0.1 10003 2>/dev/null || [ "$tries" -ge 20 ]; do
+    tries=$((tries + 1))
+    sleep 0.5
+done
+new_srs_pid=$(dc exec -T mailserver pgrep -o postsrsd)
+check "postsrsd restarts by itself" test -n "$new_srs_pid" -a "$new_srs_pid" != "$srs_pid"
 send alice@b.test outage@a.test smoke-outage >/dev/null
 check "mail flows again when postsrsd returns" in_sink smoke-outage
 
@@ -258,8 +277,8 @@ dc stop mailpit >/dev/null 2>&1
 send alice@b.test queued@a.test smoke-queued >/dev/null
 check "mail waits in the queue while the destination is down" \
     in_logs 'orig_to=<queued@a\.test>.*status=deferred'
-dc restart mailserver postsrsd >/dev/null 2>&1
-dc up -d --wait --wait-timeout 60 mailserver postsrsd >/dev/null 2>&1
+dc restart mailserver >/dev/null 2>&1
+dc up -d --wait --wait-timeout 60 mailserver >/dev/null 2>&1
 check "SRS secret survives a restart" test "$(secret_sum)" = "$secret_before"
 check "certificate survives a restart" test "$(cert_sum)" = "$cert_before"
 queue=$(dc exec -T mailserver postqueue -p)

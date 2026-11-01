@@ -40,9 +40,9 @@ smtpd_client_connection_rate_limit = 30
 smtpd_client_message_rate_limit = 60
 
 # SRS
-sender_canonical_maps = socketmap:inet:postsrsd:10003:forward
+sender_canonical_maps = socketmap:inet:127.0.0.1:10003:forward
 sender_canonical_classes = envelope_sender
-recipient_canonical_maps = socketmap:inet:postsrsd:10003:reverse
+recipient_canonical_maps = socketmap:inet:127.0.0.1:10003:reverse
 recipient_canonical_classes = envelope_recipient, header_recipient
 
 # Backscatter: discard all mail with an empty envelope sender. README.md explains the trade-off.

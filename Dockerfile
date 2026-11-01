@@ -16,14 +16,13 @@ COPY rootfs/ /
 RUN cp -R /etc/postfix/dynamicmaps.cf /etc/postfix/dynamicmaps.cf.d \
           /etc/postfix/postfix-files /etc/postfix/postfix-files.d \
           /usr/local/etc/postfix/ \
- && install -d -o postsrsd -g postsrsd -m 0700 /var/lib/postsrsd \
+ && install -d -o root -g root -m 0700 /var/lib/postsrsd \
  && install -d -o root -g root -m 0755 /etc/postfix-tls
 
 EXPOSE 25
 
 # Checks for the port 25 listener. `postfix status` logs a line on every check, connecting to
 # the port logs two, and postqueue reports success as root even when Postfix is down.
-# postsrsd uses the same image and overrides this check in compose.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=1s --retries=3 \
     CMD grep -q ' 00000000:0019 00000000:0000 0A ' /proc/net/tcp
 

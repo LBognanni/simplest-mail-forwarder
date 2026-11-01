@@ -1,56 +1,31 @@
 # Same hardening as deploy/compose.yml. Keep them in step.
 name: smf-test
 
-x-mailserver: &hardening
-  read_only: true
-  cap_drop: [ALL]
-  security_opt:
-    - no-new-privileges:true
-
 services:
   mailserver:
-    <<: *hardening
     image: ${IMAGE:-simplest-mail-forwarder:test}
     hostname: mail.smf.test
-    depends_on: [postsrsd, mailpit]
+    depends_on: [mailpit]
     environment:
       - MAIL_HOSTNAME=mail.smf.test
       - FORWARD_RULES=@a.test:one@example.com;@b.test:two@example.com;vip@a.test:three@example.com;@srs.test:four@example.com
+      - SRS_DOMAIN=srs.test
     volumes:
       - postfix-spool:/var/spool/postfix
       - mail-tls:/etc/postfix-tls
+      - srs-secret:/var/lib/postsrsd
     tmpfs:
       - /run
       - /tmp
       - /etc/postfix
       - /var/lib/postfix
+    read_only: true
+    cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt:
+      - no-new-privileges:true
     pids_limit: 200
     mem_limit: 256m
-    networks: [default, mail-internal]
-
-  postsrsd:
-    <<: *hardening
-    image: ${IMAGE:-simplest-mail-forwarder:test}
-    entrypoint: ["/usr/local/bin/postsrsd-entrypoint.sh"]
-    user: postsrsd
-    init: true
-    environment:
-      - SRS_DOMAIN=srs.test
-    volumes:
-      - srs-secret:/var/lib/postsrsd
-    tmpfs:
-      - /tmp
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "10003"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      start_interval: 1s
-      retries: 3
-    pids_limit: 50
-    mem_limit: 64m
-    networks: [mail-internal]
 
   # The delivery sink. smoke.sh points Postfix here with postconf.
   mailpit:
@@ -84,7 +59,3 @@ volumes:
   postfix-spool:
   mail-tls:
   srs-secret:
-
-networks:
-  mail-internal:
-    internal: true

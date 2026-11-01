@@ -21,12 +21,19 @@ LOCAL_RE='[A-Za-z0-9._%+-]+'
 
 : "${MAIL_HOSTNAME:=}"
 : "${FORWARD_RULES:=}"
+: "${SRS_DOMAIN:=}"
 [ -n "$MAIL_HOSTNAME" ] || die "MAIL_HOSTNAME is required"
 [ -n "$FORWARD_RULES" ] || die "FORWARD_RULES is required"
+[ -n "$SRS_DOMAIN" ] || die "SRS_DOMAIN is required"
 
 if ! only_address_chars "$MAIL_HOSTNAME" \
     || ! printf '%s' "$MAIL_HOSTNAME" | grep -Eq "^$DOMAIN_RE\$"; then
     die "MAIL_HOSTNAME is not a valid hostname"
+fi
+
+if ! only_address_chars "$SRS_DOMAIN" \
+    || ! printf '%s' "$SRS_DOMAIN" | grep -Eq "^$DOMAIN_RE\$"; then
+    die "SRS_DOMAIN is not a valid domain"
 fi
 
 case "$FORWARD_RULES" in
@@ -83,5 +90,35 @@ if [ ! -s "$key" ] || [ ! -s "$cert" ]; then
     )
 fi
 
+# Never replace an existing secret: bounces to older SRS addresses need it.
+secret=/var/lib/postsrsd/secret
+if [ ! -s "$secret" ]; then
+    (
+        umask 077
+        od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$secret.new"
+        mv "$secret.new" "$secret"
+    )
+fi
+
+srs_config=/run/postsrsd.conf
+cat > "$srs_config" <<CONFIG
+srs-domain = "$SRS_DOMAIN"
+domains = {}
+socketmap = "inet:127.0.0.1:10003"
+secrets-file = "$secret"
+original-envelope = embedded
+unprivileged-user = "postsrsd"
+chroot-dir = ""
+CONFIG
+
 postfix check
+
+# The Postfix master must be PID 1, so nothing can sit above both programs. This loop stays
+# behind after the exec and restarts PostSRSd, which reads the secret and then drops to its
+# own user. While it's down, Postfix answers 451 and senders retry.
+while :; do
+    postsrsd -C "$srs_config" || echo "entrypoint: postsrsd exited with status $?" >&2
+    sleep 1
+done &
+
 exec postfix start-fg

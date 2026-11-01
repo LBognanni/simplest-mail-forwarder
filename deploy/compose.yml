@@ -13,15 +13,16 @@ services:
     image: ${IMAGE:?set IMAGE to the published image, pinned by digest}
     hostname: ${MAIL_HOSTNAME:?}
     restart: unless-stopped
-    depends_on: [postsrsd]
     ports:
       - "25:25"
     environment:
       - MAIL_HOSTNAME=${MAIL_HOSTNAME:?}
       - FORWARD_RULES=${FORWARD_RULES:?}
+      - SRS_DOMAIN=${SRS_DOMAIN:?}
     volumes:
       - postfix-spool:/var/spool/postfix
       - mail-tls:/etc/postfix-tls
+      - srs-secret:/var/lib/postsrsd
     tmpfs:
       - /run
       - /tmp
@@ -34,42 +35,9 @@ services:
       - no-new-privileges:true
     pids_limit: 200
     mem_limit: 256m
-    networks: [default, mail-internal]
-    <<: *logging
-
-  postsrsd:
-    image: ${IMAGE:?}
-    entrypoint: ["/usr/local/bin/postsrsd-entrypoint.sh"]
-    user: postsrsd
-    init: true
-    restart: unless-stopped
-    environment:
-      - SRS_DOMAIN=${SRS_DOMAIN:?}
-    volumes:
-      - srs-secret:/var/lib/postsrsd
-    tmpfs:
-      - /tmp
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "10003"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      start_interval: 1s
-      retries: 3
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 50
-    mem_limit: 64m
-    networks: [mail-internal]
     <<: *logging
 
 volumes:
   postfix-spool:
   mail-tls:
   srs-secret:
-
-networks:
-  mail-internal:
-    internal: true

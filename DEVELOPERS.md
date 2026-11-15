@@ -47,8 +47,9 @@ Trivy fails on fixable HIGH or CRITICAL findings.
 ## CI
 
 CI rebuilds the image weekly and on every push to `main`, then tests and scans it. If those pass, it
-publishes the date and `latest` tags with build provenance. Pull requests build and test, but never
-publish. Dependabot proposes updates to the base image, Mailpit, Trivy and the pinned actions.
+publishes `latest` and a versioned tag (`<yyyy-mm-dd>.<run number>.<run attempt>`) with build provenance,
+and creates a GitHub release of the same name that records the image digest. Pull requests build and
+test, but never publish. Dependabot proposes updates to the base image, Mailpit, Trivy and the pinned actions.
 
 CI doesn't deploy or announce new images. GitHub also disables scheduled workflows after 60 days without
 repository activity, so check that the weekly build is still running.
